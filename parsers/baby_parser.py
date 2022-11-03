@@ -11,6 +11,8 @@ import csv
 from repository.ddl import add_good, add_link, add_prices, add_good_baby, add_link_baby, add_price_baby
 from repository.dml import get_price_list
 from utils.py_logger import get_logger
+from utils.garbage_collector import clean_memory
+from utils.proffiler import profile
 
 """ Парсер для роботи з сайтом parsers """
 
@@ -77,6 +79,7 @@ def get_goods_link():  # Збирає посилання на товар зі с
             f'[INFO]Goods links were collect.\nAmount {len(goods_urls_set)}.')
 
 
+# @profile
 def feed_data(filename):  # парсить сайт за допомогою лінків, за записує в БД інформацію про товар, лінк, та ціну
     with open(filename, 'rb') as file:
         goods_urls_set = pickle.load(file)
@@ -86,6 +89,8 @@ def feed_data(filename):  # парсить сайт за допомогою лі
     problem_links = []
     bad_links = []
     for url in goods_urls_set:
+        # url += '#additional:~:text=Spezifikationen' #6 bad
+        url += '#additional'  # 5 bad
         limit -= 1
         if limit == 0:
             break
@@ -101,12 +106,9 @@ def feed_data(filename):  # парсить сайт за допомогою лі
         print(f"[INFO] Scaning page: {counter}/{total}")
         logger.debug(f'URL {url}')
         try:
-            # optional_goods = soup.find_all(name='div', class_='product-add-form')
-            # logger.debug(optional_goods)
             tables = soup.find('table', class_='data table additional-attributes').find_all('td', class_="col data")
             title_ = soup.title.text.split('|')
             content = soup.find_all('meta')
-
             table_content = ''
             for table in tables:
                 table_content += table.text + ' '
@@ -114,43 +116,28 @@ def feed_data(filename):  # парсить сайт за допомогою лі
             if ean_:
                 ean = ean_.group()
                 logger.debug(f'EAN {ean}')
-            else:
-                with open(f"parsers/draft/good_{limit}.html", "w") as fh:
-                    fh.write(response)
-                bad_links.append(url)
-
+                title = title_[0].strip()
+                logger.debug(f'TITLE {title}')
+                add_good_baby(ean, title)
+                sleep(random.randrange(1, 2))
+                add_link_baby(url, ean)
+                for row in content:
+                    try:
+                        if 'product:price:amount' == row['property']:
+                            price_ = float(row['content'])
+                            logger.debug(f'PRICE {price_}')
+                            add_price_baby(price_, ean)
+                    except KeyError:
+                        continue
             article_ = re.search('\d{8}', table_content)
+            article = None
             if article_:
                 article = article_.group()
                 logger.debug(f'Article {article}')
-
-
-        # with open(f"parsers/draft/good_{limit}.html", "w") as fh:
-        #     fh.write(response)
-
-            #     ean = table.text.strip()
-            #     if ean.isdigit() and len(ean) == 13:
-            #         logger.debug(f'EAN {ean}')
-                #                 title = title_[0].strip()
-                #                 logger.debug(f'TITLE {title}')
-                #                 add_good_baby(ean, title)
-                #                 sleep(random.randrange(1, 2))
-                #                 add_link_baby(url, ean)
-                #                 for row in content:
-                #                     try:
-                #                         if 'product:price:amount' == row['property']:
-                #                             price_ = float(row['content'])
-                #                             logger.debug(f'PRICE {price_}')
-                #                             add_price_baby(price_, ean)
-                #                     except KeyError:
-                #                         continue
-                # elif ean.isdigit() and len(ean) == 8:
-                #     problem_links.append({'article': ean, 'url': url})
-                #     logger.debug(f'Problem link, Article {ean} : {url}')
-                # else:
-                #     bad_links.append(url)
-                #     logger.debug(f'Bad link, not EAN {url}')
-        #
+            if not ean_ and article_:
+                problem_links.append({'article': article, 'url': url})
+            elif not ean_ and not article_:
+                bad_links.append(url)
         except Exception as err:
             print(err)
             continue
@@ -158,13 +145,16 @@ def feed_data(filename):  # парсить сайт за допомогою лі
         logger.debug(f'List with problem link = {len(problem_links)}')
         with open(f'parsers/draft/problem_links_{cur_time}.json', 'a') as jf:
             json.dump(problem_links, jf, indent=4)
+    if len(bad_links) > 0:
         with open(f'parsers/draft/bad_links_{cur_time}.json', 'a') as jf:
             json.dump(bad_links, jf, indent=4)
+    clean_memory()
 
 
 def get_csv():  # Функція отримання csv файлу цін з БД
     price_list = get_price_list()
     total = len(price_list)
+    logger.debug(f'Total items {total}')
     with open(f'data/price_list_{cur_time}.csv', 'w', encoding='utf-8', newline='') as file:
         fieldnames = ['Title', 'EAN number', 'price EUR']
         writer = csv.DictWriter(file, delimiter=',', fieldnames=fieldnames)
@@ -178,7 +168,7 @@ if __name__ == '__main__':
     timer = time()
     # get_category_links()
     # get_goods_link() # Результат 4600 посилань, за 2000 секунд
-    feed_data('parsers/draft/goods_urls_set.bin')
-    # get_csv()
+    # feed_data('parsers/draft/goods_urls_set.bin')
+    get_csv()
 
     print(f'Work time {round(time() - timer, 4)} sec')
